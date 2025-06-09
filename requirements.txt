@@ -1,0 +1,7 @@
+mcp>=0.9.1
+httpx>=0.24.0
+pydantic>=2.0
+pydantic-settings>=2.0
+python-dotenv>=1.0.0
+simple-salesforce>=1.12.5
+python-jose[cryptography]>=3.3.0
