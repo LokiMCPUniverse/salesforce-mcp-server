@@ -6,10 +6,24 @@ import logging
 from typing import Dict, List, Optional, Any, Sequence
 from datetime import datetime
 
-from mcp.server import Server, NotificationOptions
-from mcp.server.models import InitializationOptions
-import mcp.server.stdio
-import mcp.types as types
+try:
+    from mcp.server import Server, NotificationOptions
+    from mcp.server.models import InitializationOptions
+    import mcp.server.stdio
+    import mcp.types as types
+except ImportError:
+    # Use mock for testing
+    from .mcp_mock import Server, NotificationOptions, InitializationOptions, stdio_server, Tool, TextContent
+    
+    class types:
+        Tool = Tool
+        TextContent = TextContent
+        ImageContent = None
+        EmbeddedResource = None
+    
+    class mcp:
+        class server:
+            stdio = type('stdio', (), {'stdio_server': stdio_server})
 
 from .client import SalesforceClient, create_client_from_config
 from .config import SalesforceConfig, OrgConfig
