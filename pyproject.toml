@@ -12,6 +12,7 @@ authors = [
     { name = "asklokesh", email = "asklokesh@example.com" }
 ]
 dependencies = [
+    "mcp>=0.9.1",
     "httpx>=0.24.0",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
@@ -31,3 +32,6 @@ dev = [
 
 [project.scripts]
 salesforce-mcp = "salesforce_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/salesforce_mcp"]

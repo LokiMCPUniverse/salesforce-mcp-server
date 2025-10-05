@@ -1,6 +1,6 @@
 """Configuration management for Salesforce MCP Server."""
 
-from typing import Dict, Optional, Any
+from typing import Optional
 from pydantic import BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings
 import os
@@ -31,46 +31,47 @@ class OrgConfig(BaseModel):
     timeout: int = Field(default=30, description="Request timeout in seconds")
     max_retries: int = Field(default=3, description="Maximum number of retries")
     
-    class Config:
-        json_encoders = {SecretStr: lambda v: v.get_secret_value() if v else None}
+    # Custom serializer for SecretStr handled by Pydantic automatically in v2
 
 
 class SalesforceConfig(BaseSettings):
     """Main configuration for Salesforce MCP Server."""
     
     # Default org settings
-    username: Optional[str] = Field(default=None, env="SALESFORCE_USERNAME")
-    password: Optional[SecretStr] = Field(default=None, env="SALESFORCE_PASSWORD")
-    security_token: Optional[SecretStr] = Field(default=None, env="SALESFORCE_SECURITY_TOKEN")
-    domain: str = Field(default="login", env="SALESFORCE_DOMAIN")
+    username: Optional[str] = Field(default=None)
+    password: Optional[SecretStr] = Field(default=None)
+    security_token: Optional[SecretStr] = Field(default=None)
+    domain: str = Field(default="login")
     
     # OAuth settings
-    client_id: Optional[str] = Field(default=None, env="SALESFORCE_CLIENT_ID")
-    client_secret: Optional[SecretStr] = Field(default=None, env="SALESFORCE_CLIENT_SECRET")
-    redirect_uri: Optional[str] = Field(default=None, env="SALESFORCE_REDIRECT_URI")
+    client_id: Optional[str] = Field(default=None)
+    client_secret: Optional[SecretStr] = Field(default=None)
+    redirect_uri: Optional[str] = Field(default=None)
     
     # API settings
-    api_version: str = Field(default="59.0", env="SALESFORCE_API_VERSION")
-    sandbox: bool = Field(default=False, env="SALESFORCE_SANDBOX")
-    timeout: int = Field(default=30, env="SALESFORCE_TIMEOUT")
-    max_retries: int = Field(default=3, env="SALESFORCE_MAX_RETRIES")
+    api_version: str = Field(default="59.0")
+    sandbox: bool = Field(default=False)
+    timeout: int = Field(default=30)
+    max_retries: int = Field(default=3)
     
     # Server settings
-    enable_audit_log: bool = Field(default=True, env="SALESFORCE_ENABLE_AUDIT_LOG")
-    audit_log_file: Optional[str] = Field(default=None, env="SALESFORCE_AUDIT_LOG_FILE")
+    enable_audit_log: bool = Field(default=True)
+    audit_log_file: Optional[str] = Field(default=None)
     
     # Rate limiting
-    rate_limit_enabled: bool = Field(default=True, env="SALESFORCE_RATE_LIMIT_ENABLED")
-    rate_limit_requests_per_second: float = Field(default=10.0, env="SALESFORCE_RATE_LIMIT_RPS")
-    rate_limit_burst_size: int = Field(default=20, env="SALESFORCE_RATE_LIMIT_BURST")
+    rate_limit_enabled: bool = Field(default=True)
+    rate_limit_requests_per_second: float = Field(default=10.0)
+    rate_limit_burst_size: int = Field(default=20)
     
     # Multi-org support
-    default_org: str = Field(default="default", env="SALESFORCE_DEFAULT_ORG")
+    default_org: str = Field(default="default")
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": False,
+        "env_prefix": "SALESFORCE_"
+    }
     
     def get_org_config(self, org_name: Optional[str] = None) -> OrgConfig:
         """Get configuration for a specific org."""

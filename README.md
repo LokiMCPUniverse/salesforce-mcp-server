@@ -27,12 +27,14 @@ A highly customizable Model Context Protocol (MCP) server for integrating Salesf
 ## Features
 
 - **Comprehensive Salesforce API Coverage**:
-  - SOQL queries for data retrieval
+  - SOQL queries with automatic pagination support
+  - SOSL (Salesforce Object Search Language) searches
   - Record CRUD operations (Create, Read, Update, Delete)
-  - Metadata API access
-  - Bulk API operations
-  - Apex REST endpoint calls
-  - Reports and dashboards access
+  - Metadata API access for object descriptions
+  - Bulk API operations for large data volumes
+  - Apex code execution capabilities
+  - Reports API with filtering support
+  - Organization limits and API usage monitoring
   
 - **Flexible Authentication**:
   - OAuth 2.0 Web Server Flow
@@ -224,6 +226,59 @@ Run Apex code:
   "tool": "salesforce_execute_apex",
   "arguments": {
     "apex_body": "System.debug('Hello from Apex!');"
+  }
+}
+```
+
+### 9. Search Records (SOSL)
+Search across multiple objects:
+```python
+{
+  "tool": "salesforce_search",
+  "arguments": {
+    "search_query": "FIND {John} IN NAME FIELDS RETURNING Contact(Id, Name, Email), Account(Id, Name)"
+  }
+}
+```
+
+### 10. Query Pagination
+Handle large query results:
+```python
+{
+  "tool": "salesforce_query_more",
+  "arguments": {
+    "next_records_url": "/services/data/v59.0/query/01gxx000000002ABC-2000"
+  }
+}
+```
+
+### 11. Organization Limits
+Get API limits and usage:
+```python
+{
+  "tool": "salesforce_limits",
+  "arguments": {}
+}
+```
+
+### 12. Run Reports
+Execute Salesforce reports:
+```python
+{
+  "tool": "salesforce_run_report",
+  "arguments": {
+    "report_id": "00O1i000004Gzr0EAC",
+    "filters": {
+      "reportMetadata": {
+        "reportFilters": [
+          {
+            "column": "CREATED_DATE",
+            "operator": "greaterThan",
+            "value": "2023-01-01"
+          }
+        ]
+      }
+    }
   }
 }
 ```

@@ -1,6 +1,6 @@
 """Mock MCP module for testing and development."""
 
-from typing import List, Dict, Any, Optional, Sequence
+from typing import Dict, Any
 from dataclasses import dataclass
 import asyncio
 

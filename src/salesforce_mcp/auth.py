@@ -1,10 +1,9 @@
 """Authentication handlers for Salesforce MCP Server."""
 
-import json
 import time
 import jwt
 from typing import Dict, Optional, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import httpx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
@@ -24,7 +23,7 @@ class AuthBase:
         """Check if the current token is still valid."""
         if not self.access_token or not self.token_expiry:
             return False
-        return datetime.utcnow() < self.token_expiry
+        return datetime.now(timezone.utc) < self.token_expiry
     
     async def get_headers(self) -> Dict[str, str]:
         """Get authentication headers."""
@@ -84,7 +83,7 @@ class UsernamePasswordAuth(AuthBase):
                 self.access_token = result["access_token"]
                 self.instance_url = result["instance_url"]
                 # Tokens typically last 2 hours
-                self.token_expiry = datetime.utcnow() + timedelta(hours=2)
+                self.token_expiry = datetime.now(timezone.utc) + timedelta(hours=2)
                 
             except httpx.HTTPStatusError as e:
                 error_data = e.response.json() if e.response.content else {}
@@ -161,7 +160,7 @@ class OAuth2Auth(AuthBase):
                 self.access_token = result["access_token"]
                 self.instance_url = result["instance_url"]
                 self.refresh_token = result.get("refresh_token")
-                self.token_expiry = datetime.utcnow() + timedelta(hours=2)
+                self.token_expiry = datetime.now(timezone.utc) + timedelta(hours=2)
                 
                 # Clear the authorization code after use
                 self.authorization_code = None
@@ -192,7 +191,7 @@ class OAuth2Auth(AuthBase):
                 result = response.json()
                 self.access_token = result["access_token"]
                 self.instance_url = result["instance_url"]
-                self.token_expiry = datetime.utcnow() + timedelta(hours=2)
+                self.token_expiry = datetime.now(timezone.utc) + timedelta(hours=2)
                 
             except httpx.HTTPStatusError as e:
                 error_data = e.response.json() if e.response.content else {}
@@ -270,7 +269,7 @@ class JWTAuth(AuthBase):
                 result = response.json()
                 self.access_token = result["access_token"]
                 self.instance_url = result["instance_url"]
-                self.token_expiry = datetime.utcnow() + timedelta(hours=2)
+                self.token_expiry = datetime.now(timezone.utc) + timedelta(hours=2)
                 
             except httpx.HTTPStatusError as e:
                 error_data = e.response.json() if e.response.content else {}

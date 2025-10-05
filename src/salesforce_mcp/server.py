@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from typing import Dict, List, Optional, Any, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 
 try:
     from mcp.server import Server, NotificationOptions
@@ -59,11 +59,14 @@ class SalesforceMCPServer:
     
     def _register_handlers(self):
         """Register all tool handlers."""
-        
+
         @self.server.list_tools()
         async def handle_list_tools() -> List[types.Tool]:
-            """Return list of available tools."""
-            return [
+            return await self._handle_list_tools()
+
+    async def _handle_list_tools(self) -> List[types.Tool]:
+        """Return list of available tools."""
+        return [
                 types.Tool(
                     name="salesforce_query",
                     description="Execute a SOQL query",
@@ -191,6 +194,40 @@ class SalesforceMCPServer:
                         },
                         "required": ["report_id"]
                     }
+                ),
+                types.Tool(
+                    name="salesforce_query_more",
+                    description="Get more records from a paginated query",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "next_records_url": {"type": "string", "description": "Next records URL from previous query"},
+                            "org": {"type": "string", "description": "Target org name"}
+                        },
+                        "required": ["next_records_url"]
+                    }
+                ),
+                types.Tool(
+                    name="salesforce_search",
+                    description="Execute a SOSL (Salesforce Object Search Language) search",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "search_query": {"type": "string", "description": "SOSL search query"},
+                            "org": {"type": "string", "description": "Target org name"}
+                        },
+                        "required": ["search_query"]
+                    }
+                ),
+                types.Tool(
+                    name="salesforce_limits",
+                    description="Get Salesforce organization limits",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "org": {"type": "string", "description": "Target org name"}
+                        }
+                    }
                 )
             ]
         
@@ -199,65 +236,71 @@ class SalesforceMCPServer:
             name: str,
             arguments: Optional[Dict[str, Any]] = None
         ) -> Sequence[types.TextContent | types.ImageContent | types.EmbeddedResource]:
-            """Handle tool execution."""
-            try:
-                # Log the tool call
-                await self._audit_log("tool_call", {
-                    "tool": name,
-                    "arguments": arguments,
-                    "timestamp": datetime.utcnow().isoformat()
-                })
-                
-                # Get the appropriate client
-                org_name = arguments.get("org", self.default_org) if arguments else self.default_org
-                client = await self._get_client(org_name)
-                
-                # Execute the tool
-                result = await self._execute_tool(name, arguments or {}, client)
-                
-                # Log success
-                await self._audit_log("tool_success", {
-                    "tool": name,
-                    "org": org_name,
-                    "timestamp": datetime.utcnow().isoformat()
-                })
-                
-                return [types.TextContent(
-                    type="text",
-                    text=json.dumps(result, indent=2)
-                )]
-                
-            except SalesforceError as e:
-                # Log error
-                await self._audit_log("tool_error", {
-                    "tool": name,
-                    "error": str(e),
-                    "error_code": e.error_code,
-                    "timestamp": datetime.utcnow().isoformat()
-                })
-                
-                error_response = {
-                    "error": e.message,
-                    "error_code": e.error_code,
-                    "details": e.details
-                }
-                
-                return [types.TextContent(
-                    type="text",
-                    text=json.dumps(error_response, indent=2)
-                )]
-            
-            except Exception as e:
-                logger.exception(f"Unexpected error in tool {name}")
-                error_response = {
-                    "error": str(e),
-                    "error_type": type(e).__name__
-                }
-                
-                return [types.TextContent(
-                    type="text",
-                    text=json.dumps(error_response, indent=2)
-                )]
+            return await self._handle_call_tool(name, arguments)
+
+    async def _handle_call_tool(
+        self,
+        name: str,
+        arguments: Optional[Dict[str, Any]] = None
+    ) -> Sequence[types.TextContent | types.ImageContent | types.EmbeddedResource]:
+        """Handle tool execution."""
+        try:
+            # Log the tool call
+            await self._audit_log("tool_call", {
+                "tool": name,
+                "arguments": arguments,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+
+            # Get the appropriate client
+            org_name = arguments.get("org", self.default_org) if arguments else self.default_org
+            client = await self._get_client(org_name)
+
+            # Execute the tool
+            result = await self._execute_tool(name, arguments or {}, client)
+            # Log success
+            await self._audit_log("tool_success", {
+                "tool": name,
+                "org": org_name,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(result, indent=2)
+            )]
+
+        except SalesforceError as e:
+            # Log error
+            await self._audit_log("tool_error", {
+                "tool": name,
+                "error": str(e),
+                "error_code": e.error_code,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+
+            error_response = {
+                "error": e.message,
+                "error_code": e.error_code,
+                "details": e.details
+            }
+
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(error_response, indent=2)
+            )]
+
+        except Exception as e:
+            logger.exception(f"Unexpected error in tool {name}")
+            error_response = {
+                "error": str(e),
+                "error_type": type(e).__name__
+            }
+
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(error_response, indent=2)
+            )]
     
     async def _get_client(self, org_name: str) -> SalesforceClient:
         """Get or create a client for the specified org."""
@@ -343,7 +386,16 @@ class SalesforceMCPServer:
             
             elif name == "salesforce_run_report":
                 return await client.run_report(**arguments)
-            
+
+            elif name == "salesforce_query_more":
+                return await client.query_more(**arguments)
+
+            elif name == "salesforce_search":
+                return await client.search(**arguments)
+
+            elif name == "salesforce_limits":
+                return await client.get_limits()
+
             else:
                 raise ValueError(f"Unknown tool: {name}")
     
@@ -354,7 +406,7 @@ class SalesforceMCPServer:
         
         log_entry = {
             "event_type": event_type,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "data": data
         }
         
