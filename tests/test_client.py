@@ -1,9 +1,9 @@
 """Unit tests for Salesforce client."""
 
+import asyncio
 import pytest
 import httpx
 from unittest.mock import Mock, AsyncMock, patch
-from datetime import datetime, timedelta
 
 from salesforce_mcp.client import SalesforceClient, RateLimiter
 from salesforce_mcp.auth import UsernamePasswordAuth

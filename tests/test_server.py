@@ -2,14 +2,12 @@
 
 import pytest
 import json
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from datetime import datetime
+from unittest.mock import Mock, AsyncMock, patch, mock_open
 
-import mcp.types as types
 from salesforce_mcp.server import SalesforceMCPServer
 from salesforce_mcp.config import SalesforceConfig, OrgConfig
 from salesforce_mcp.client import SalesforceClient
-from salesforce_mcp.exceptions import ValidationError, ObjectNotFoundError
+from salesforce_mcp.exceptions import ValidationError
 
 
 @pytest.fixture
@@ -18,7 +16,22 @@ def config():
     config = Mock(spec=SalesforceConfig)
     config.enable_audit_log = False
     config.audit_log_file = None
-    config.get_org_config.return_value = Mock(spec=OrgConfig)
+    org_config_mock = Mock(spec=OrgConfig)
+    org_config_mock.username = "test@example.com"
+    password_mock = Mock()
+    password_mock.get_secret_value.return_value = "test_password"
+    org_config_mock.password = password_mock
+
+    token_mock = Mock()
+    token_mock.get_secret_value.return_value = "test_token"
+    org_config_mock.security_token = token_mock
+    org_config_mock.domain = "test"
+    org_config_mock.client_id = None
+    org_config_mock.client_secret = None
+    org_config_mock.api_version = "59.0"
+    org_config_mock.timeout = 30
+    org_config_mock.max_retries = 3
+    config.get_org_config.return_value = org_config_mock
     config.get_rate_limit_config.return_value = None
     config.validate_config.return_value = True
     return config
@@ -33,8 +46,8 @@ def server(config):
 @pytest.mark.asyncio
 async def test_list_tools(server):
     """Test listing available tools."""
-    tools = await server.server.list_tools()
-    
+    tools = await server._handle_list_tools()
+
     tool_names = [tool.name for tool in tools]
     
     expected_tools = [
@@ -47,7 +60,10 @@ async def test_list_tools(server):
         "salesforce_bulk_create",
         "salesforce_execute_apex",
         "salesforce_list_objects",
-        "salesforce_run_report"
+        "salesforce_run_report",
+        "salesforce_query_more",
+        "salesforce_search",
+        "salesforce_limits"
     ]
     
     for expected in expected_tools:
@@ -71,7 +87,7 @@ async def test_execute_query_tool(server):
     
     with patch.object(server, '_get_client', return_value=mock_client):
         with patch.object(server, '_audit_log', new_callable=AsyncMock):
-            result = await server.server.call_tool(
+            result = await server._handle_call_tool(
                 "salesforce_query",
                 {"query": "SELECT Id, Name FROM Account LIMIT 1"}
             )
@@ -96,7 +112,7 @@ async def test_execute_create_record_tool(server):
     
     with patch.object(server, '_get_client', return_value=mock_client):
         with patch.object(server, '_audit_log', new_callable=AsyncMock):
-            result = await server.server.call_tool(
+            result = await server._handle_call_tool(
                 "salesforce_create_record",
                 {
                     "object_type": "Contact",
@@ -121,7 +137,7 @@ async def test_execute_update_record_tool(server):
     
     with patch.object(server, '_get_client', return_value=mock_client):
         with patch.object(server, '_audit_log', new_callable=AsyncMock):
-            result = await server.server.call_tool(
+            result = await server._handle_call_tool(
                 "salesforce_update_record",
                 {
                     "object_type": "Contact",
@@ -143,7 +159,7 @@ async def test_execute_delete_record_tool(server):
     
     with patch.object(server, '_get_client', return_value=mock_client):
         with patch.object(server, '_audit_log', new_callable=AsyncMock):
-            result = await server.server.call_tool(
+            result = await server._handle_call_tool(
                 "salesforce_delete_record",
                 {
                     "object_type": "Contact",
@@ -169,7 +185,7 @@ async def test_execute_bulk_create_tool(server):
     
     with patch.object(server, '_get_client', return_value=mock_client):
         with patch.object(server, '_audit_log', new_callable=AsyncMock):
-            result = await server.server.call_tool(
+            result = await server._handle_call_tool(
                 "salesforce_bulk_create",
                 {
                     "object_type": "Contact",
@@ -198,7 +214,7 @@ async def test_execute_apex_tool(server):
     
     with patch.object(server, '_get_client', return_value=mock_client):
         with patch.object(server, '_audit_log', new_callable=AsyncMock):
-            result = await server.server.call_tool(
+            result = await server._handle_call_tool(
                 "salesforce_execute_apex",
                 {"apex_body": "System.debug('Hello');"}
             )
@@ -219,7 +235,7 @@ async def test_error_handling(server):
     
     with patch.object(server, '_get_client', return_value=mock_client):
         with patch.object(server, '_audit_log', new_callable=AsyncMock) as mock_audit:
-            result = await server.server.call_tool(
+            result = await server._handle_call_tool(
                 "salesforce_query",
                 {"query": "SELECT INVALID FROM Account"}
             )
@@ -289,7 +305,7 @@ async def test_audit_logging_enabled(config):
 async def test_unknown_tool_error(server):
     """Test handling of unknown tool."""
     with patch.object(server, '_audit_log', new_callable=AsyncMock):
-        result = await server.server.call_tool(
+        result = await server._handle_call_tool(
             "salesforce_unknown_tool",
             {}
         )
@@ -322,7 +338,7 @@ async def test_list_objects_tool(server):
     
     with patch.object(server, '_get_client', return_value=mock_client):
         with patch.object(server, '_audit_log', new_callable=AsyncMock):
-            result = await server.server.call_tool(
+            result = await server._handle_call_tool(
                 "salesforce_list_objects",
                 {}
             )
@@ -348,7 +364,7 @@ async def test_describe_object_tool(server):
     
     with patch.object(server, '_get_client', return_value=mock_client):
         with patch.object(server, '_audit_log', new_callable=AsyncMock):
-            result = await server.server.call_tool(
+            result = await server._handle_call_tool(
                 "salesforce_describe_object",
                 {"object_type": "Account"}
             )

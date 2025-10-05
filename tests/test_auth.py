@@ -1,11 +1,10 @@
 """Unit tests for authentication modules."""
 
 import pytest
-import json
 import jwt
 import httpx
-from unittest.mock import Mock, AsyncMock, patch, mock_open
-from datetime import datetime, timedelta
+from unittest.mock import Mock, AsyncMock, patch
+from datetime import datetime, timedelta, timezone
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
@@ -57,7 +56,7 @@ class TestUsernamePasswordAuth:
             
             assert auth.access_token == "test_access_token"
             assert auth.instance_url == "https://test.salesforce.com"
-            assert auth.token_expiry > datetime.utcnow()
+            assert auth.token_expiry > datetime.now(timezone.utc)
             
             # Check request parameters
             mock_client.post.assert_called_once()
@@ -133,18 +132,18 @@ class TestUsernamePasswordAuth:
         
         # Set token and expiry
         auth.access_token = "test_token"
-        auth.token_expiry = datetime.utcnow() + timedelta(hours=1)
+        auth.token_expiry = datetime.now(timezone.utc) + timedelta(hours=1)
         assert auth.is_token_valid()
         
         # Expired token
-        auth.token_expiry = datetime.utcnow() - timedelta(hours=1)
+        auth.token_expiry = datetime.now(timezone.utc) - timedelta(hours=1)
         assert not auth.is_token_valid()
     
     @pytest.mark.asyncio
     async def test_get_headers(self, auth):
         """Test getting authentication headers."""
         auth.access_token = "test_token"
-        auth.token_expiry = datetime.utcnow() + timedelta(hours=1)
+        auth.token_expiry = datetime.now(timezone.utc) + timedelta(hours=1)
         
         headers = await auth.get_headers()
         

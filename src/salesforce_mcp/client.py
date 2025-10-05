@@ -2,10 +2,9 @@
 
 import json
 import asyncio
-from typing import Dict, List, Optional, Any, Union
-from datetime import datetime
+from typing import Dict, List, Optional, Any
 import httpx
-from urllib.parse import quote
+from urllib.parse import urlparse
 
 from .auth import AuthBase, UsernamePasswordAuth
 from .config import OrgConfig, RateLimitConfig
@@ -112,28 +111,35 @@ class SalesforceClient:
                 json=data,
                 params=params
             )
-            
+
             if response.status_code == 401 and retry_count < self.max_retries:
                 # Token might be expired, try to re-authenticate
                 await self.auth.authenticate()
                 return await self._make_request(
                     method, endpoint, data, params, retry_count + 1
                 )
-            
+
             response.raise_for_status()
-            
+
             if response.content:
                 return response.json()
             return {}
-            
+
         except httpx.HTTPStatusError as e:
+            # Check if this is a 401 and we can retry
+            if e.response.status_code == 401 and retry_count < self.max_retries:
+                # Token might be expired, try to re-authenticate
+                await self.auth.authenticate()
+                return await self._make_request(
+                    method, endpoint, data, params, retry_count + 1
+                )
             self._handle_http_error(e)
     
     def _handle_http_error(self, error: httpx.HTTPStatusError) -> None:
         """Handle HTTP errors from Salesforce."""
         try:
             error_data = error.response.json()
-        except:
+        except Exception:
             error_data = [{"message": str(error), "errorCode": "UNKNOWN_ERROR"}]
         
         if isinstance(error_data, list) and error_data:
@@ -284,7 +290,7 @@ class SalesforceClient:
             
             return job_status
             
-        except Exception as e:
+        except Exception:
             # Abort job on error
             try:
                 await self._make_request(
@@ -292,7 +298,7 @@ class SalesforceClient:
                     f"/services/data/v{self.api_version}/jobs/ingest/{job_id}",
                     data={"state": "Aborted"}
                 )
-            except:
+            except Exception:
                 pass
             raise
     
@@ -357,6 +363,29 @@ class SalesforceClient:
         endpoint = f"/services/data/v{self.api_version}/analytics/reports/{report_id}"
         data = {"reportMetadata": filters} if filters else None
         return await self._make_request("POST", endpoint, data=data)
+
+    async def query_more(self, next_records_url: str) -> Dict[str, Any]:
+        """Get more records from a paginated query."""
+        # Extract the endpoint from the next_records_url
+        if next_records_url.startswith("/"):
+            endpoint = next_records_url
+        else:
+            # Handle full URLs
+            parsed = urlparse(next_records_url)
+            endpoint = parsed.path + ("?" + parsed.query if parsed.query else "")
+
+        return await self._make_request("GET", endpoint)
+
+    async def search(self, search_query: str) -> Dict[str, Any]:
+        """Execute a SOSL search."""
+        endpoint = f"/services/data/v{self.api_version}/search"
+        params = {"q": search_query}
+        return await self._make_request("GET", endpoint, params=params)
+
+    async def get_limits(self) -> Dict[str, Any]:
+        """Get organization limits."""
+        endpoint = f"/services/data/v{self.api_version}/limits"
+        return await self._make_request("GET", endpoint)
 
 
 def create_client_from_config(org_config: OrgConfig, rate_limit_config: Optional[RateLimitConfig] = None) -> SalesforceClient:
