@@ -275,12 +275,21 @@ class SalesforceClient:
                 data={"state": "UploadComplete"}
             )
             
-            # Wait for completion
-            while True:
+            # Wait for completion (with timeout)
+            max_polls = 150  # 150 * 2 seconds = 5 minutes max
+            polls = 0
+            while polls < max_polls:
                 job_status = await self._make_request("GET", job_endpoint)
                 if job_status["state"] in ["JobComplete", "Failed", "Aborted"]:
                     break
                 await asyncio.sleep(2)
+                polls += 1
+            
+            if polls >= max_polls:
+                raise BulkOperationError(
+                    "Bulk job timed out after 5 minutes",
+                    job_id=job_id
+                )
             
             if job_status["state"] != "JobComplete":
                 raise BulkOperationError(
