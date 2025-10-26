@@ -168,7 +168,7 @@ class SalesforceClient:
     
     async def query(
         self,
-        soql: str,
+        query: str,
         include_deleted: bool = False
     ) -> Dict[str, Any]:
         """Execute a SOQL query."""
@@ -176,7 +176,7 @@ class SalesforceClient:
         if include_deleted:
             endpoint = f"/services/data/v{self.api_version}/queryAll"
         
-        params = {"q": soql}
+        params = {"q": query}
         return await self._make_request("GET", endpoint, params=params)
     
     async def get_record(
