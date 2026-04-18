@@ -1,26 +1,27 @@
 """Salesforce API client implementation."""
 
-import json
 import asyncio
-from typing import Dict, List, Optional, Any
-import httpx
+import json
+from typing import Any
 from urllib.parse import urlparse
+
+import httpx
 
 from .auth import AuthBase, UsernamePasswordAuth
 from .config import OrgConfig, RateLimitConfig
 from .exceptions import (
-    SalesforceError,
-    ValidationError,
+    ApexExecutionError,
+    BulkOperationError,
     ObjectNotFoundError,
     RateLimitError,
-    BulkOperationError,
-    ApexExecutionError
+    SalesforceError,
+    ValidationError,
 )
 
 
 class RateLimiter:
     """Simple rate limiter implementation."""
-    
+
     def __init__(self, config: RateLimitConfig):
         self.requests_per_second = config.requests_per_second
         self.burst_size = config.burst_size
@@ -28,7 +29,7 @@ class RateLimiter:
         self.tokens = float(self.burst_size)
         self.last_update = asyncio.get_event_loop().time()
         self._lock = asyncio.Lock()
-    
+
     async def acquire(self) -> None:
         """Acquire a token for making a request."""
         async with self._lock:
@@ -39,7 +40,7 @@ class RateLimiter:
                 self.tokens + elapsed * self.requests_per_second
             )
             self.last_update = now
-            
+
             if self.tokens < 1:
                 if self.wait_on_limit:
                     wait_time = (1 - self.tokens) / self.requests_per_second
@@ -50,59 +51,59 @@ class RateLimiter:
                         "Rate limit exceeded",
                         retry_after=int((1 - self.tokens) / self.requests_per_second)
                     )
-            
+
             self.tokens -= 1
 
 
 class SalesforceClient:
     """Client for interacting with Salesforce APIs."""
-    
+
     def __init__(
         self,
         auth: AuthBase,
         api_version: str = "59.0",
         timeout: int = 30,
         max_retries: int = 3,
-        rate_limiter: Optional[RateLimiter] = None
+        rate_limiter: RateLimiter | None = None
     ):
         self.auth = auth
         self.api_version = api_version
         self.timeout = timeout
         self.max_retries = max_retries
         self.rate_limiter = rate_limiter
-        self._client: Optional[httpx.AsyncClient] = None
-    
+        self._client: httpx.AsyncClient | None = None
+
     async def __aenter__(self):
         """Async context manager entry."""
         self._client = httpx.AsyncClient(timeout=self.timeout)
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit."""
         if self._client:
             await self._client.aclose()
-    
+
     async def _make_request(
         self,
         method: str,
         endpoint: str,
-        data: Optional[Dict[str, Any]] = None,
-        params: Optional[Dict[str, Any]] = None,
+        data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
         retry_count: int = 0
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Make an authenticated request to Salesforce."""
         if self.rate_limiter:
             await self.rate_limiter.acquire()
-        
+
         if not self.auth.instance_url:
             await self.auth.authenticate()
-        
+
         url = f"{self.auth.instance_url}{endpoint}"
         headers = await self.auth.get_headers()
-        
+
         if not self._client:
             self._client = httpx.AsyncClient(timeout=self.timeout)
-        
+
         try:
             response = await self._client.request(
                 method=method,
@@ -134,22 +135,22 @@ class SalesforceClient:
                     method, endpoint, data, params, retry_count + 1
                 )
             self._handle_http_error(e)
-    
+
     def _handle_http_error(self, error: httpx.HTTPStatusError) -> None:
         """Handle HTTP errors from Salesforce."""
         try:
             error_data = error.response.json()
         except Exception:
             error_data = [{"message": str(error), "errorCode": "UNKNOWN_ERROR"}]
-        
+
         if isinstance(error_data, list) and error_data:
             error_info = error_data[0]
         else:
             error_info = error_data
-        
+
         message = error_info.get("message", str(error))
         error_code = error_info.get("errorCode", "UNKNOWN_ERROR")
-        
+
         if error.response.status_code == 400:
             raise ValidationError(message, field_errors=error_info.get("fields", {}))
         elif error.response.status_code == 404:
@@ -165,54 +166,54 @@ class SalesforceClient:
                 error_code=error_code,
                 status_code=error.response.status_code
             )
-    
+
     async def query(
         self,
         query: str,
         include_deleted: bool = False
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Execute a SOQL query."""
         endpoint = f"/services/data/v{self.api_version}/query"
         if include_deleted:
             endpoint = f"/services/data/v{self.api_version}/queryAll"
-        
+
         params = {"q": query}
         return await self._make_request("GET", endpoint, params=params)
-    
+
     async def get_record(
         self,
         object_type: str,
         record_id: str,
-        fields: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
+        fields: list[str] | None = None
+    ) -> dict[str, Any]:
         """Retrieve a single record."""
         endpoint = f"/services/data/v{self.api_version}/sobjects/{object_type}/{record_id}"
-        
+
         params = {}
         if fields:
             params["fields"] = ",".join(fields)
-        
+
         return await self._make_request("GET", endpoint, params=params)
-    
+
     async def create_record(
         self,
         object_type: str,
-        data: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        data: dict[str, Any]
+    ) -> dict[str, Any]:
         """Create a new record."""
         endpoint = f"/services/data/v{self.api_version}/sobjects/{object_type}"
         return await self._make_request("POST", endpoint, data=data)
-    
+
     async def update_record(
         self,
         object_type: str,
         record_id: str,
-        data: Dict[str, Any]
+        data: dict[str, Any]
     ) -> None:
         """Update an existing record."""
         endpoint = f"/services/data/v{self.api_version}/sobjects/{object_type}/{record_id}"
         await self._make_request("PATCH", endpoint, data=data)
-    
+
     async def delete_record(
         self,
         object_type: str,
@@ -221,26 +222,26 @@ class SalesforceClient:
         """Delete a record."""
         endpoint = f"/services/data/v{self.api_version}/sobjects/{object_type}/{record_id}"
         await self._make_request("DELETE", endpoint)
-    
+
     async def describe_object(
         self,
         object_type: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get metadata about an object."""
         endpoint = f"/services/data/v{self.api_version}/sobjects/{object_type}/describe"
         return await self._make_request("GET", endpoint)
-    
-    async def describe_global(self) -> Dict[str, Any]:
+
+    async def describe_global(self) -> dict[str, Any]:
         """Get metadata about all objects."""
         endpoint = f"/services/data/v{self.api_version}/sobjects"
         return await self._make_request("GET", endpoint)
-    
+
     async def bulk_create(
         self,
         object_type: str,
-        records: List[Dict[str, Any]],
+        records: list[dict[str, Any]],
         batch_size: int = 200
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Create multiple records using Bulk API 2.0."""
         # Create job
         job_endpoint = f"/services/data/v{self.api_version}/jobs/ingest"
@@ -250,23 +251,23 @@ class SalesforceClient:
         }
         job = await self._make_request("POST", job_endpoint, data=job_data)
         job_id = job["id"]
-        
+
         try:
             # Upload data in batches
             for i in range(0, len(records), batch_size):
                 batch = records[i:i + batch_size]
                 csv_data = self._records_to_csv(batch)
-                
+
                 batch_endpoint = f"/services/data/v{self.api_version}/jobs/ingest/{job_id}/batches"
                 headers = await self.auth.get_headers()
                 headers["Content-Type"] = "text/csv"
-                
+
                 await self._client.put(
                     f"{self.auth.instance_url}{batch_endpoint}",
                     headers=headers,
                     content=csv_data
                 )
-            
+
             # Start job processing
             job_endpoint = f"/services/data/v{self.api_version}/jobs/ingest/{job_id}"
             await self._make_request(
@@ -274,7 +275,7 @@ class SalesforceClient:
                 job_endpoint,
                 data={"state": "UploadComplete"}
             )
-            
+
             # Wait for completion (with timeout)
             max_polls = 150  # 150 * 2 seconds = 5 minutes max
             polls = 0
@@ -284,21 +285,21 @@ class SalesforceClient:
                     break
                 await asyncio.sleep(2)
                 polls += 1
-            
+
             if polls >= max_polls:
                 raise BulkOperationError(
                     "Bulk job timed out after 5 minutes",
                     job_id=job_id
                 )
-            
+
             if job_status["state"] != "JobComplete":
                 raise BulkOperationError(
                     f"Bulk job failed: {job_status.get('stateMessage', 'Unknown error')}",
                     job_id=job_id
                 )
-            
+
             return job_status
-            
+
         except Exception:
             # Abort job on error
             try:
@@ -310,18 +311,18 @@ class SalesforceClient:
             except Exception:
                 pass
             raise
-    
-    def _records_to_csv(self, records: List[Dict[str, Any]]) -> str:
+
+    def _records_to_csv(self, records: list[dict[str, Any]]) -> str:
         """Convert records to CSV format for bulk API."""
         if not records:
             return ""
-        
+
         # Get all field names
         fields = set()
         for record in records:
             fields.update(record.keys())
         fields = sorted(fields)
-        
+
         # Build CSV
         lines = [",".join(fields)]
         for record in records:
@@ -330,50 +331,50 @@ class SalesforceClient:
                 value = record.get(field, "")
                 if value is None:
                     value = ""
-                elif isinstance(value, (dict, list)):
+                elif isinstance(value, dict | list):
                     value = json.dumps(value)
                 values.append(str(value))
             lines.append(",".join(values))
-        
+
         return "\n".join(lines)
-    
-    async def execute_apex(self, apex_body: str) -> Dict[str, Any]:
+
+    async def execute_apex(self, apex_body: str) -> dict[str, Any]:
         """Execute anonymous Apex code."""
         endpoint = f"/services/data/v{self.api_version}/tooling/executeAnonymous"
         params = {"anonymousBody": apex_body}
-        
+
         result = await self._make_request("GET", endpoint, params=params)
-        
+
         if not result.get("success", False):
             compile_problem = result.get("compileProblem")
             exception_message = result.get("exceptionMessage")
             line = result.get("line")
-            
+
             raise ApexExecutionError(
                 "Apex execution failed",
                 compile_error=compile_problem,
                 runtime_error=exception_message,
                 line_number=line
             )
-        
+
         return result
-    
-    async def get_reports(self) -> Dict[str, Any]:
+
+    async def get_reports(self) -> dict[str, Any]:
         """Get list of available reports."""
         endpoint = f"/services/data/v{self.api_version}/analytics/reports"
         return await self._make_request("GET", endpoint)
-    
+
     async def run_report(
         self,
         report_id: str,
-        filters: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        filters: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Run a report and get results."""
         endpoint = f"/services/data/v{self.api_version}/analytics/reports/{report_id}"
         data = {"reportMetadata": filters} if filters else None
         return await self._make_request("POST", endpoint, data=data)
 
-    async def query_more(self, next_records_url: str) -> Dict[str, Any]:
+    async def query_more(self, next_records_url: str) -> dict[str, Any]:
         """Get more records from a paginated query."""
         # Extract the endpoint from the next_records_url
         if next_records_url.startswith("/"):
@@ -385,19 +386,19 @@ class SalesforceClient:
 
         return await self._make_request("GET", endpoint)
 
-    async def search(self, search_query: str) -> Dict[str, Any]:
+    async def search(self, search_query: str) -> dict[str, Any]:
         """Execute a SOSL search."""
         endpoint = f"/services/data/v{self.api_version}/search"
         params = {"q": search_query}
         return await self._make_request("GET", endpoint, params=params)
 
-    async def get_limits(self) -> Dict[str, Any]:
+    async def get_limits(self) -> dict[str, Any]:
         """Get organization limits."""
         endpoint = f"/services/data/v{self.api_version}/limits"
         return await self._make_request("GET", endpoint)
 
 
-def create_client_from_config(org_config: OrgConfig, rate_limit_config: Optional[RateLimitConfig] = None) -> SalesforceClient:
+def create_client_from_config(org_config: OrgConfig, rate_limit_config: RateLimitConfig | None = None) -> SalesforceClient:
     """Create a Salesforce client from configuration."""
     # Determine auth method
     if org_config.username and org_config.password:
@@ -411,12 +412,12 @@ def create_client_from_config(org_config: OrgConfig, rate_limit_config: Optional
         )
     else:
         raise ValueError("Authentication configuration required")
-    
+
     # Create rate limiter if configured
     rate_limiter = None
     if rate_limit_config:
         rate_limiter = RateLimiter(rate_limit_config)
-    
+
     return SalesforceClient(
         auth=auth,
         api_version=org_config.api_version,

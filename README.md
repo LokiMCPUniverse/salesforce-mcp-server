@@ -86,18 +86,34 @@ SALESFORCE_MAX_RETRIES=3
 SALESFORCE_TIMEOUT=30
 ```
 
+## Requirements
+
+- Python 3.10 or newer
+- MCP SDK 1.27+
+
 ## Quick Start
 
-### Basic Usage
+### Run the server
+
+The server is built on the MCP Python SDK's FastMCP API and speaks the stdio
+transport. Install the package, configure credentials via environment
+variables (see Configuration), and launch with:
+
+```bash
+salesforce-mcp
+# or equivalently
+python -m salesforce_mcp.server
+```
+
+### Programmatic usage
 
 ```python
-from salesforce_mcp import SalesforceMCPServer
+from salesforce_mcp import mcp
 
-# Initialize the server
-server = SalesforceMCPServer()
-
-# Start the server
-server.start()
+# `mcp` is a configured `FastMCP` instance with every Salesforce tool
+# already registered. Run it over stdio:
+if __name__ == "__main__":
+    mcp.run(transport="stdio")
 ```
 
 ### Claude Desktop Configuration
@@ -108,8 +124,7 @@ Add to your Claude Desktop config:
 {
   "mcpServers": {
     "salesforce": {
-      "command": "python",
-      "args": ["-m", "salesforce_mcp.server"],
+      "command": "salesforce-mcp",
       "env": {
         "SALESFORCE_USERNAME": "your_username@company.com",
         "SALESFORCE_PASSWORD": "your_password",
@@ -287,56 +302,49 @@ Execute Salesforce reports:
 
 ### Multi-Org Support
 
-```python
-from salesforce_mcp import SalesforceMCPServer, OrgConfig
+Additional orgs are configured by setting prefixed environment variables.
+For example, to expose a `sandbox` org alongside the default:
 
-# Configure multiple orgs
-orgs = {
-    "production": OrgConfig(
-        username="prod@company.com",
-        password="prod_password",
-        security_token="prod_token",
-        domain="login"
-    ),
-    "sandbox": OrgConfig(
-        username="sandbox@company.com.sandbox",
-        password="sandbox_password",
-        security_token="sandbox_token",
-        domain="test"
-    )
-}
+```env
+SALESFORCE_USERNAME=prod@company.com
+SALESFORCE_PASSWORD=prod_password
+SALESFORCE_SECURITY_TOKEN=prod_token
 
-server = SalesforceMCPServer(orgs=orgs, default_org="production")
+SALESFORCE_SANDBOX_USERNAME=sandbox@company.com.sandbox
+SALESFORCE_SANDBOX_PASSWORD=sandbox_password
+SALESFORCE_SANDBOX_SECURITY_TOKEN=sandbox_token
+SALESFORCE_SANDBOX_DOMAIN=test
 ```
 
-### Custom Authentication
+Every tool accepts an optional `org` argument; omitting it targets the
+default org defined by `SALESFORCE_DEFAULT_ORG` (defaulting to `"default"`).
+
+### Authentication classes
+
+The `salesforce_mcp.auth` module exposes `UsernamePasswordAuth`, `OAuth2Auth`,
+and `JWTAuth` for use when embedding the underlying `SalesforceClient` in
+your own code:
 
 ```python
-from salesforce_mcp import SalesforceMCPServer, JWTAuth
+from salesforce_mcp import JWTAuth, SalesforceClient
 
-# JWT Bearer Flow
-jwt_auth = JWTAuth(
+auth = JWTAuth(
     client_id="your_client_id",
     username="your_username",
     private_key_file="path/to/private_key.pem",
-    sandbox=False
+    sandbox=False,
 )
-
-server = SalesforceMCPServer(auth=jwt_auth)
+client = SalesforceClient(auth=auth)
 ```
 
 ### Rate Limiting
 
-```python
-from salesforce_mcp import SalesforceMCPServer, RateLimitConfig
+Rate limiting is enabled by default and tuned via environment variables:
 
-rate_limit = RateLimitConfig(
-    requests_per_second=10,
-    burst_size=20,
-    wait_on_limit=True
-)
-
-server = SalesforceMCPServer(rate_limit=rate_limit)
+```env
+SALESFORCE_RATE_LIMIT_ENABLED=true
+SALESFORCE_RATE_LIMIT_REQUESTS_PER_SECOND=10
+SALESFORCE_RATE_LIMIT_BURST_SIZE=20
 ```
 
 ## Integration Examples

@@ -1,458 +1,385 @@
-"""Salesforce MCP Server implementation."""
+"""Salesforce MCP Server implementation using FastMCP."""
 
-import asyncio
+from __future__ import annotations
+
 import json
 import logging
-from typing import Dict, List, Optional, Any, Sequence
+import os
+import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
-try:
-    from mcp.server import Server, NotificationOptions
-    from mcp.server.models import InitializationOptions
-    import mcp.server.stdio
-    import mcp.types as types
-except ImportError:
-    # Use mock for testing
-    from .mcp_mock import Server, NotificationOptions, InitializationOptions, stdio_server, Tool, TextContent
-    
-    class types:
-        Tool = Tool
-        TextContent = TextContent
-        ImageContent = None
-        EmbeddedResource = None
-    
-    class mcp:
-        class server:
-            stdio = type('stdio', (), {'stdio_server': stdio_server})
+from mcp.server.fastmcp import Context, FastMCP
 
 from .client import SalesforceClient, create_client_from_config
-from .config import SalesforceConfig, OrgConfig
+from .config import OrgConfig, SalesforceConfig
 from .exceptions import SalesforceError
 
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class SalesforceMCPServer:
-    """MCP Server for Salesforce API integration."""
-    
-    def __init__(
-        self,
-        config: Optional[SalesforceConfig] = None,
-        orgs: Optional[Dict[str, OrgConfig]] = None,
-        default_org: str = "default"
-    ):
-        self.server = Server("salesforce-mcp")
-        self.config = config or SalesforceConfig()
-        self.orgs = orgs or {"default": self.config.get_org_config()}
-        self.default_org = default_org
-        self.clients: Dict[str, SalesforceClient] = {}
-        
-        # Register handlers
-        self._register_handlers()
-        
-        # Audit log setup
-        self.audit_log_enabled = self.config.enable_audit_log
-        self.audit_log_file = self.config.audit_log_file
-    
-    def _register_handlers(self):
-        """Register all tool handlers."""
+@dataclass
+class AppContext:
+    """Application context injected into every tool call."""
 
-        @self.server.list_tools()
-        async def handle_list_tools() -> List[types.Tool]:
-            return await self._handle_list_tools()
+    config: SalesforceConfig
+    orgs: dict[str, OrgConfig]
+    default_org: str
+    clients: dict[str, SalesforceClient] = field(default_factory=dict)
+    audit_log_enabled: bool = True
+    audit_log_file: str | None = None
 
-    async def _handle_list_tools(self) -> List[types.Tool]:
-        """Return list of available tools."""
-        return [
-                types.Tool(
-                    name="salesforce_query",
-                    description="Execute a SOQL query",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "SOQL query to execute"},
-                            "include_deleted": {"type": "boolean", "description": "Include deleted records", "default": False},
-                            "org": {"type": "string", "description": "Target org name"}
-                        },
-                        "required": ["query"]
-                    }
-                ),
-                types.Tool(
-                    name="salesforce_get_record",
-                    description="Retrieve a specific record by ID",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "object_type": {"type": "string", "description": "Salesforce object type"},
-                            "record_id": {"type": "string", "description": "Record ID"},
-                            "fields": {"type": "array", "items": {"type": "string"}, "description": "Fields to retrieve"},
-                            "org": {"type": "string", "description": "Target org name"}
-                        },
-                        "required": ["object_type", "record_id"]
-                    }
-                ),
-                types.Tool(
-                    name="salesforce_create_record",
-                    description="Create a new record",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "object_type": {"type": "string", "description": "Salesforce object type"},
-                            "data": {"type": "object", "description": "Record data"},
-                            "org": {"type": "string", "description": "Target org name"}
-                        },
-                        "required": ["object_type", "data"]
-                    }
-                ),
-                types.Tool(
-                    name="salesforce_update_record",
-                    description="Update an existing record",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "object_type": {"type": "string", "description": "Salesforce object type"},
-                            "record_id": {"type": "string", "description": "Record ID"},
-                            "data": {"type": "object", "description": "Fields to update"},
-                            "org": {"type": "string", "description": "Target org name"}
-                        },
-                        "required": ["object_type", "record_id", "data"]
-                    }
-                ),
-                types.Tool(
-                    name="salesforce_delete_record",
-                    description="Delete a record",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "object_type": {"type": "string", "description": "Salesforce object type"},
-                            "record_id": {"type": "string", "description": "Record ID"},
-                            "org": {"type": "string", "description": "Target org name"}
-                        },
-                        "required": ["object_type", "record_id"]
-                    }
-                ),
-                types.Tool(
-                    name="salesforce_describe_object",
-                    description="Get metadata about a Salesforce object",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "object_type": {"type": "string", "description": "Salesforce object type"},
-                            "org": {"type": "string", "description": "Target org name"}
-                        },
-                        "required": ["object_type"]
-                    }
-                ),
-                types.Tool(
-                    name="salesforce_bulk_create",
-                    description="Create multiple records using Bulk API",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "object_type": {"type": "string", "description": "Salesforce object type"},
-                            "records": {"type": "array", "items": {"type": "object"}, "description": "Records to create"},
-                            "batch_size": {"type": "integer", "description": "Batch size", "default": 200},
-                            "org": {"type": "string", "description": "Target org name"}
-                        },
-                        "required": ["object_type", "records"]
-                    }
-                ),
-                types.Tool(
-                    name="salesforce_execute_apex",
-                    description="Execute anonymous Apex code",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "apex_body": {"type": "string", "description": "Apex code to execute"},
-                            "org": {"type": "string", "description": "Target org name"}
-                        },
-                        "required": ["apex_body"]
-                    }
-                ),
-                types.Tool(
-                    name="salesforce_list_objects",
-                    description="List all available Salesforce objects",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "org": {"type": "string", "description": "Target org name"}
-                        }
-                    }
-                ),
-                types.Tool(
-                    name="salesforce_run_report",
-                    description="Run a Salesforce report",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "report_id": {"type": "string", "description": "Report ID"},
-                            "filters": {"type": "object", "description": "Report filters"},
-                            "org": {"type": "string", "description": "Target org name"}
-                        },
-                        "required": ["report_id"]
-                    }
-                ),
-                types.Tool(
-                    name="salesforce_query_more",
-                    description="Get more records from a paginated query",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "next_records_url": {"type": "string", "description": "Next records URL from previous query"},
-                            "org": {"type": "string", "description": "Target org name"}
-                        },
-                        "required": ["next_records_url"]
-                    }
-                ),
-                types.Tool(
-                    name="salesforce_search",
-                    description="Execute a SOSL (Salesforce Object Search Language) search",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "search_query": {"type": "string", "description": "SOSL search query"},
-                            "org": {"type": "string", "description": "Target org name"}
-                        },
-                        "required": ["search_query"]
-                    }
-                ),
-                types.Tool(
-                    name="salesforce_limits",
-                    description="Get Salesforce organization limits",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "org": {"type": "string", "description": "Target org name"}
-                        }
-                    }
-                )
-            ]
-        
-        @self.server.call_tool()
-        async def handle_call_tool(
-            name: str,
-            arguments: Optional[Dict[str, Any]] = None
-        ) -> Sequence[types.TextContent | types.ImageContent | types.EmbeddedResource]:
-            return await self._handle_call_tool(name, arguments)
-
-    async def _handle_call_tool(
-        self,
-        name: str,
-        arguments: Optional[Dict[str, Any]] = None
-    ) -> Sequence[types.TextContent | types.ImageContent | types.EmbeddedResource]:
-        """Handle tool execution."""
-        try:
-            # Log the tool call
-            await self._audit_log("tool_call", {
-                "tool": name,
-                "arguments": arguments,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            })
-
-            # Get the appropriate client
-            org_name = arguments.get("org", self.default_org) if arguments else self.default_org
-            client = await self._get_client(org_name)
-
-            # Execute the tool
-            result = await self._execute_tool(name, arguments or {}, client)
-            # Log success
-            await self._audit_log("tool_success", {
-                "tool": name,
-                "org": org_name,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            })
-
-            return [types.TextContent(
-                type="text",
-                text=json.dumps(result, indent=2)
-            )]
-
-        except SalesforceError as e:
-            # Log error
-            await self._audit_log("tool_error", {
-                "tool": name,
-                "error": str(e),
-                "error_code": e.error_code,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            })
-
-            error_response = {
-                "error": e.message,
-                "error_code": e.error_code,
-                "details": e.details
-            }
-
-            return [types.TextContent(
-                type="text",
-                text=json.dumps(error_response, indent=2)
-            )]
-
-        except Exception as e:
-            logger.exception(f"Unexpected error in tool {name}")
-            error_response = {
-                "error": str(e),
-                "error_type": type(e).__name__
-            }
-
-            return [types.TextContent(
-                type="text",
-                text=json.dumps(error_response, indent=2)
-            )]
-    
-    async def _get_client(self, org_name: str) -> SalesforceClient:
-        """Get or create a client for the specified org."""
-        if org_name not in self.clients:
-            if org_name not in self.orgs:
-                # Try to load from environment
-                org_config = self.config.get_org_config(org_name)
-                if not org_config.username:
-                    raise ValueError(f"Unknown org: {org_name}")
-                self.orgs[org_name] = org_config
-            
-            self.clients[org_name] = create_client_from_config(
-                self.orgs[org_name],
-                self.config.get_rate_limit_config()
+    async def get_client(self, org_name: str | None = None) -> SalesforceClient:
+        """Return (creating if necessary) a Salesforce client for the org."""
+        name = org_name or self.default_org
+        if name not in self.clients:
+            if name not in self.orgs:
+                org_config = self.config.get_org_config(name)
+                if not org_config.username and not (org_config.client_id and org_config.client_secret):
+                    raise ValueError(f"Unknown org: {name}")
+                self.orgs[name] = org_config
+            self.clients[name] = create_client_from_config(
+                self.orgs[name],
+                self.config.get_rate_limit_config(),
             )
-        
-        return self.clients[org_name]
-    
-    async def _execute_tool(
-        self,
-        name: str,
-        arguments: Dict[str, Any],
-        client: SalesforceClient
-    ) -> Dict[str, Any]:
-        """Execute a specific tool."""
-        # Remove org from arguments as it's not needed by the client methods
-        arguments = {k: v for k, v in arguments.items() if k != "org"}
-        
-        async with client:
-            if name == "salesforce_query":
-                return await client.query(**arguments)
-            
-            elif name == "salesforce_get_record":
-                return await client.get_record(**arguments)
-            
-            elif name == "salesforce_create_record":
-                result = await client.create_record(**arguments)
-                return {"success": True, "id": result.get("id"), "result": result}
-            
-            elif name == "salesforce_update_record":
-                await client.update_record(**arguments)
-                return {"success": True, "message": "Record updated successfully"}
-            
-            elif name == "salesforce_delete_record":
-                await client.delete_record(**arguments)
-                return {"success": True, "message": "Record deleted successfully"}
-            
-            elif name == "salesforce_describe_object":
-                return await client.describe_object(**arguments)
-            
-            elif name == "salesforce_bulk_create":
-                result = await client.bulk_create(**arguments)
-                return {
-                    "success": True,
-                    "job_id": result.get("id"),
-                    "state": result.get("state"),
-                    "records_processed": result.get("numberRecordsProcessed"),
-                    "records_failed": result.get("numberRecordsFailed")
-                }
-            
-            elif name == "salesforce_execute_apex":
-                result = await client.execute_apex(**arguments)
-                return {
-                    "success": True,
-                    "compiled": result.get("compiled"),
-                    "executed": result.get("success"),
-                    "logs": result.get("logs")
-                }
-            
-            elif name == "salesforce_list_objects":
-                result = await client.describe_global()
-                return {
-                    "objects": [
-                        {
-                            "name": obj["name"],
-                            "label": obj["label"],
-                            "custom": obj["custom"],
-                            "queryable": obj["queryable"]
-                        }
-                        for obj in result.get("sobjects", [])
-                    ]
-                }
-            
-            elif name == "salesforce_run_report":
-                return await client.run_report(**arguments)
+        return self.clients[name]
 
-            elif name == "salesforce_query_more":
-                return await client.query_more(**arguments)
+    async def close(self) -> None:
+        """Close all open clients."""
+        for client in self.clients.values():
+            try:
+                if client._client is not None:
+                    await client._client.aclose()
+            except Exception:  # pragma: no cover - best effort
+                logger.exception("Failed to close Salesforce client cleanly")
+        self.clients.clear()
 
-            elif name == "salesforce_search":
-                return await client.search(**arguments)
-
-            elif name == "salesforce_limits":
-                return await client.get_limits()
-
-            else:
-                raise ValueError(f"Unknown tool: {name}")
-    
-    async def _audit_log(self, event_type: str, data: Dict[str, Any]) -> None:
-        """Log audit events."""
+    def audit(self, event_type: str, data: dict[str, Any]) -> None:
+        """Write an audit log entry, if audit logging is enabled."""
         if not self.audit_log_enabled:
             return
-        
-        log_entry = {
+        entry = {
             "event_type": event_type,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "data": data
+            "data": data,
         }
-        
         if self.audit_log_file:
             try:
-                with open(self.audit_log_file, "a") as f:
-                    f.write(json.dumps(log_entry) + "\n")
-            except Exception as e:
-                logger.error(f"Failed to write audit log: {e}")
+                with open(self.audit_log_file, "a") as fh:
+                    fh.write(json.dumps(entry) + "\n")
+            except Exception:
+                logger.exception("Failed to write audit log to %s", self.audit_log_file)
         else:
-            logger.info(f"Audit: {json.dumps(log_entry)}")
-    
-    async def run(self):
-        """Run the MCP server."""
-        async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
-            await self.server.run(
-                read_stream,
-                write_stream,
-                InitializationOptions(
-                    server_name="salesforce-mcp",
-                    server_version="0.1.0",
-                    capabilities=self.server.get_capabilities(
-                        notification_options=NotificationOptions(),
-                        experimental_capabilities={}
-                    )
-                )
-            )
+            logger.info("Audit: %s", json.dumps(entry))
 
 
-def main():
-    """Main entry point."""
-    import sys
-    
+def _build_app_context(
+    config: SalesforceConfig | None = None,
+    orgs: dict[str, OrgConfig] | None = None,
+    default_org: str | None = None,
+) -> AppContext:
+    """Construct an AppContext, deriving defaults from config where needed."""
+    cfg = config or SalesforceConfig()
+    resolved_orgs: dict[str, OrgConfig] = dict(orgs or {})
+    # Seed default org from the base config if not already populated
+    default_name = default_org or cfg.default_org
+    if default_name not in resolved_orgs:
+        resolved_orgs[default_name] = cfg.get_org_config()
+    return AppContext(
+        config=cfg,
+        orgs=resolved_orgs,
+        default_org=default_name,
+        audit_log_enabled=cfg.enable_audit_log,
+        audit_log_file=cfg.audit_log_file,
+    )
+
+
+@asynccontextmanager
+async def _lifespan(_: FastMCP) -> AsyncIterator[AppContext]:
+    """Create and tear down the application context for the server lifetime."""
+    ctx = _build_app_context()
     try:
-        # Load configuration
-        config = SalesforceConfig()
-        config.validate_config()
-        
-        # Create and run server
-        server = SalesforceMCPServer(config)
-        asyncio.run(server.run())
-        
-    except Exception as e:
-        logger.exception("Failed to start Salesforce MCP Server")
-        print(f"Error: {e}", file=sys.stderr)
+        yield ctx
+    finally:
+        await ctx.close()
+
+
+mcp = FastMCP("salesforce-mcp", lifespan=_lifespan)
+
+
+def _app_ctx(ctx: Context) -> AppContext:
+    """Get the typed AppContext from the MCP context."""
+    return ctx.request_context.lifespan_context  # type: ignore[return-value]
+
+
+async def _run_tool(
+    ctx: Context,
+    tool_name: str,
+    org: str | None,
+    fn,
+) -> Any:
+    """Shared wrapper that performs audit logging and error shaping."""
+    app = _app_ctx(ctx)
+    app.audit("tool_call", {"tool": tool_name, "org": org})
+    try:
+        client = await app.get_client(org)
+        async with client:
+            result = await fn(client)
+        app.audit("tool_success", {"tool": tool_name, "org": org or app.default_org})
+        return result
+    except SalesforceError as exc:
+        app.audit(
+            "tool_error",
+            {"tool": tool_name, "error": str(exc), "error_code": exc.error_code},
+        )
+        return {
+            "error": exc.message,
+            "error_code": exc.error_code,
+            "details": exc.details,
+        }
+
+
+@mcp.tool()
+async def salesforce_query(
+    ctx: Context,
+    query: str,
+    include_deleted: bool = False,
+    org: str | None = None,
+) -> dict[str, Any]:
+    """Execute a SOQL query. Set include_deleted=True to search IsDeleted records."""
+    return await _run_tool(
+        ctx,
+        "salesforce_query",
+        org,
+        lambda c: c.query(query=query, include_deleted=include_deleted),
+    )
+
+
+@mcp.tool()
+async def salesforce_get_record(
+    ctx: Context,
+    object_type: str,
+    record_id: str,
+    fields: list[str] | None = None,
+    org: str | None = None,
+) -> dict[str, Any]:
+    """Retrieve a Salesforce record by ID, optionally limiting returned fields."""
+    return await _run_tool(
+        ctx,
+        "salesforce_get_record",
+        org,
+        lambda c: c.get_record(object_type=object_type, record_id=record_id, fields=fields),
+    )
+
+
+@mcp.tool()
+async def salesforce_create_record(
+    ctx: Context,
+    object_type: str,
+    data: dict[str, Any],
+    org: str | None = None,
+) -> dict[str, Any]:
+    """Create a new Salesforce record of the given object type."""
+
+    async def _do(client: SalesforceClient) -> dict[str, Any]:
+        result = await client.create_record(object_type=object_type, data=data)
+        return {"success": True, "id": result.get("id"), "result": result}
+
+    return await _run_tool(ctx, "salesforce_create_record", org, _do)
+
+
+@mcp.tool()
+async def salesforce_update_record(
+    ctx: Context,
+    object_type: str,
+    record_id: str,
+    data: dict[str, Any],
+    org: str | None = None,
+) -> dict[str, Any]:
+    """Update fields on an existing Salesforce record."""
+
+    async def _do(client: SalesforceClient) -> dict[str, Any]:
+        await client.update_record(object_type=object_type, record_id=record_id, data=data)
+        return {"success": True, "message": "Record updated successfully"}
+
+    return await _run_tool(ctx, "salesforce_update_record", org, _do)
+
+
+@mcp.tool()
+async def salesforce_delete_record(
+    ctx: Context,
+    object_type: str,
+    record_id: str,
+    org: str | None = None,
+) -> dict[str, Any]:
+    """Delete a Salesforce record by ID."""
+
+    async def _do(client: SalesforceClient) -> dict[str, Any]:
+        await client.delete_record(object_type=object_type, record_id=record_id)
+        return {"success": True, "message": "Record deleted successfully"}
+
+    return await _run_tool(ctx, "salesforce_delete_record", org, _do)
+
+
+@mcp.tool()
+async def salesforce_describe_object(
+    ctx: Context,
+    object_type: str,
+    org: str | None = None,
+) -> dict[str, Any]:
+    """Return field/metadata information for a Salesforce object."""
+    return await _run_tool(
+        ctx,
+        "salesforce_describe_object",
+        org,
+        lambda c: c.describe_object(object_type=object_type),
+    )
+
+
+@mcp.tool()
+async def salesforce_bulk_create(
+    ctx: Context,
+    object_type: str,
+    records: list[dict[str, Any]],
+    batch_size: int = 200,
+    org: str | None = None,
+) -> dict[str, Any]:
+    """Insert multiple records using the Salesforce Bulk API 2.0."""
+
+    async def _do(client: SalesforceClient) -> dict[str, Any]:
+        result = await client.bulk_create(
+            object_type=object_type,
+            records=records,
+            batch_size=batch_size,
+        )
+        return {
+            "success": True,
+            "job_id": result.get("id"),
+            "state": result.get("state"),
+            "records_processed": result.get("numberRecordsProcessed"),
+            "records_failed": result.get("numberRecordsFailed"),
+        }
+
+    return await _run_tool(ctx, "salesforce_bulk_create", org, _do)
+
+
+@mcp.tool()
+async def salesforce_execute_apex(
+    ctx: Context,
+    apex_body: str,
+    org: str | None = None,
+) -> dict[str, Any]:
+    """Execute anonymous Apex code."""
+
+    async def _do(client: SalesforceClient) -> dict[str, Any]:
+        result = await client.execute_apex(apex_body=apex_body)
+        return {
+            "success": True,
+            "compiled": result.get("compiled"),
+            "executed": result.get("success"),
+            "logs": result.get("logs"),
+        }
+
+    return await _run_tool(ctx, "salesforce_execute_apex", org, _do)
+
+
+@mcp.tool()
+async def salesforce_list_objects(
+    ctx: Context,
+    org: str | None = None,
+) -> dict[str, Any]:
+    """List all Salesforce objects visible to the authenticated user."""
+
+    async def _do(client: SalesforceClient) -> dict[str, Any]:
+        result = await client.describe_global()
+        return {
+            "objects": [
+                {
+                    "name": obj["name"],
+                    "label": obj["label"],
+                    "custom": obj["custom"],
+                    "queryable": obj["queryable"],
+                }
+                for obj in result.get("sobjects", [])
+            ]
+        }
+
+    return await _run_tool(ctx, "salesforce_list_objects", org, _do)
+
+
+@mcp.tool()
+async def salesforce_run_report(
+    ctx: Context,
+    report_id: str,
+    filters: dict[str, Any] | None = None,
+    org: str | None = None,
+) -> dict[str, Any]:
+    """Run a Salesforce analytics report."""
+    return await _run_tool(
+        ctx,
+        "salesforce_run_report",
+        org,
+        lambda c: c.run_report(report_id=report_id, filters=filters),
+    )
+
+
+@mcp.tool()
+async def salesforce_query_more(
+    ctx: Context,
+    next_records_url: str,
+    org: str | None = None,
+) -> dict[str, Any]:
+    """Retrieve the next page of a paginated SOQL query."""
+    return await _run_tool(
+        ctx,
+        "salesforce_query_more",
+        org,
+        lambda c: c.query_more(next_records_url=next_records_url),
+    )
+
+
+@mcp.tool()
+async def salesforce_search(
+    ctx: Context,
+    search_query: str,
+    org: str | None = None,
+) -> dict[str, Any]:
+    """Execute a SOSL (Salesforce Object Search Language) search."""
+    return await _run_tool(
+        ctx,
+        "salesforce_search",
+        org,
+        lambda c: c.search(search_query=search_query),
+    )
+
+
+@mcp.tool()
+async def salesforce_limits(
+    ctx: Context,
+    org: str | None = None,
+) -> dict[str, Any]:
+    """Return the Salesforce organization's API limits and usage."""
+    return await _run_tool(
+        ctx,
+        "salesforce_limits",
+        org,
+        lambda c: c.get_limits(),
+    )
+
+
+def main() -> None:
+    """Entry point for the stdio server."""
+    logging.basicConfig(level=os.environ.get("SALESFORCE_MCP_LOG_LEVEL", "INFO"))
+    try:
+        SalesforceConfig().validate_config()
+    except Exception as exc:  # pragma: no cover - startup guard
+        logger.exception("Invalid Salesforce MCP configuration")
+        print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
+    mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":

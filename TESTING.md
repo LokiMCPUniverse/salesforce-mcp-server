@@ -54,9 +54,9 @@ pytest tests/ -v --cov=salesforce_mcp
 
 ## Current Test Status
 
-✅ **42 tests passing (100%)**
-✅ **All linting checks pass**
-✅ **No security vulnerabilities**
+- 44 tests passing (100%)
+- All linting checks pass
+- No known security vulnerabilities
 
 ## GitHub Actions CI
 
@@ -64,7 +64,7 @@ The GitHub Actions workflow automatically runs on:
 - Push to main or develop branches
 - Pull requests to main branch
 
-It tests on Python 3.8, 3.9, 3.10, and 3.11.
+It tests on Python 3.10 and 3.11.
 
 ### Workflow Steps
 1. Install dependencies
@@ -76,18 +76,11 @@ It tests on Python 3.8, 3.9, 3.10, and 3.11.
 
 ## Manual Testing
 
-To test the server manually:
+To verify the server imports cleanly:
 
 ```python
-from salesforce_mcp import SalesforceMCPServer
-from salesforce_mcp.config import SalesforceConfig
-
-# Create configuration (will use environment variables)
-config = SalesforceConfig()
-
-# Create and instantiate server
-server = SalesforceMCPServer(config)
-print(f"Server created: {server.server.name}")
+from salesforce_mcp.server import mcp
+print(f"Server created: {mcp.name}")
 ```
 
 ## Environment Setup for Testing

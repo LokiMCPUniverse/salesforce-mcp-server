@@ -1,22 +1,24 @@
 """Salesforce MCP Server - Model Context Protocol server for Salesforce API integration."""
 
-from .server import SalesforceMCPServer
+from .auth import JWTAuth, OAuth2Auth, UsernamePasswordAuth
 from .client import SalesforceClient
-from .config import SalesforceConfig, OrgConfig, RateLimitConfig
-from .auth import JWTAuth, OAuth2Auth
-from .exceptions import SalesforceError, AuthenticationError, RateLimitError
+from .config import OrgConfig, RateLimitConfig, SalesforceConfig
+from .exceptions import AuthenticationError, RateLimitError, SalesforceError
+from .server import AppContext, mcp
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
-    "SalesforceMCPServer",
-    "SalesforceClient",
-    "SalesforceConfig",
-    "OrgConfig",
-    "RateLimitConfig",
+    "AppContext",
+    "AuthenticationError",
     "JWTAuth",
     "OAuth2Auth",
-    "SalesforceError",
-    "AuthenticationError",
+    "OrgConfig",
+    "RateLimitConfig",
     "RateLimitError",
+    "SalesforceClient",
+    "SalesforceConfig",
+    "SalesforceError",
+    "UsernamePasswordAuth",
+    "mcp",
 ]

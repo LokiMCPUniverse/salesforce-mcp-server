@@ -1,17 +1,17 @@
 """Custom exceptions for Salesforce MCP Server."""
 
-from typing import Optional, List, Dict, Any
+from typing import Any
 
 
 class SalesforceError(Exception):
     """Base exception for Salesforce-related errors."""
-    
+
     def __init__(
         self,
         message: str,
-        error_code: Optional[str] = None,
-        status_code: Optional[int] = None,
-        details: Optional[Dict[str, Any]] = None
+        error_code: str | None = None,
+        status_code: int | None = None,
+        details: dict[str, Any] | None = None
     ):
         super().__init__(message)
         self.message = message
@@ -22,8 +22,8 @@ class SalesforceError(Exception):
 
 class AuthenticationError(SalesforceError):
     """Raised when authentication fails."""
-    
-    def __init__(self, message: str, auth_type: Optional[str] = None):
+
+    def __init__(self, message: str, auth_type: str | None = None):
         super().__init__(
             message=message,
             error_code="AUTHENTICATION_FAILED",
@@ -34,8 +34,8 @@ class AuthenticationError(SalesforceError):
 
 class AuthorizationError(SalesforceError):
     """Raised when user lacks permissions."""
-    
-    def __init__(self, message: str, required_permission: Optional[str] = None):
+
+    def __init__(self, message: str, required_permission: str | None = None):
         super().__init__(
             message=message,
             error_code="INSUFFICIENT_PRIVILEGES",
@@ -46,13 +46,13 @@ class AuthorizationError(SalesforceError):
 
 class RateLimitError(SalesforceError):
     """Raised when API rate limit is exceeded."""
-    
+
     def __init__(
         self,
         message: str,
-        retry_after: Optional[int] = None,
-        limit: Optional[int] = None,
-        remaining: Optional[int] = None
+        retry_after: int | None = None,
+        limit: int | None = None,
+        remaining: int | None = None
     ):
         super().__init__(
             message=message,
@@ -66,12 +66,12 @@ class RateLimitError(SalesforceError):
 
 class ValidationError(SalesforceError):
     """Raised when data validation fails."""
-    
+
     def __init__(
         self,
         message: str,
-        field_errors: Optional[Dict[str, List[str]]] = None,
-        available_fields: Optional[List[str]] = None
+        field_errors: dict[str, list[str]] | None = None,
+        available_fields: list[str] | None = None
     ):
         super().__init__(
             message=message,
@@ -84,12 +84,12 @@ class ValidationError(SalesforceError):
 
 class ObjectNotFoundError(SalesforceError):
     """Raised when a requested object doesn't exist."""
-    
+
     def __init__(
         self,
         message: str,
-        object_type: Optional[str] = None,
-        object_id: Optional[str] = None
+        object_type: str | None = None,
+        object_id: str | None = None
     ):
         super().__init__(
             message=message,
@@ -102,12 +102,12 @@ class ObjectNotFoundError(SalesforceError):
 
 class BulkOperationError(SalesforceError):
     """Raised when a bulk operation fails."""
-    
+
     def __init__(
         self,
         message: str,
-        job_id: Optional[str] = None,
-        failed_records: Optional[List[Dict[str, Any]]] = None
+        job_id: str | None = None,
+        failed_records: list[dict[str, Any]] | None = None
     ):
         super().__init__(
             message=message,
@@ -120,13 +120,13 @@ class BulkOperationError(SalesforceError):
 
 class ApexExecutionError(SalesforceError):
     """Raised when Apex code execution fails."""
-    
+
     def __init__(
         self,
         message: str,
-        compile_error: Optional[str] = None,
-        runtime_error: Optional[str] = None,
-        line_number: Optional[int] = None
+        compile_error: str | None = None,
+        runtime_error: str | None = None,
+        line_number: int | None = None
     ):
         super().__init__(
             message=message,
@@ -140,12 +140,12 @@ class ApexExecutionError(SalesforceError):
 
 class ConnectionError(SalesforceError):
     """Raised when connection to Salesforce fails."""
-    
+
     def __init__(
         self,
         message: str,
-        endpoint: Optional[str] = None,
-        timeout: Optional[int] = None
+        endpoint: str | None = None,
+        timeout: int | None = None
     ):
         super().__init__(
             message=message,
